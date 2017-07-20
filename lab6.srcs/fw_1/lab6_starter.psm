@@ -1,0 +1,162 @@
+; Author:	Todd Blackmon based on starter design by K. Newlander
+; LAB6 Design that contains a global register that defaults to 0 on startup. The
+; global register is displayed at all times as a 16-bit number on the seven-
+; segment display.
+;
+; Resets current global register to zero on each press of BTND
+; Performs a calculator operation on each press of BTNR:
+;   On each press of BTNR, SW(7:4) are used with a priority encoding to 
+;   determine the operation
+;   ---1  = ADD;  Adds the value of SW(3:0) to the global register
+;   --10  = SUB;  Subtracts the value of SW(3:0) from the global register
+;   -100  = LSH;  Arithmetically shifts the global register by SW(3:0) bits
+;   1000  = MUL;  Multiplies the global register by the value of SW(3:0)
+;   0000  = NOP;  No change
+
+; Extra ASM to fix issue with Vivado (see documentation), Skips Address 03
+	            JUMP cold_start
+	            JUMP cold_start
+	            JUMP cold_start
+	            JUMP cold_start
+; Cold Start
+cold_start:
+
+; SLIDERS are assigned to PORT 02
+; PUSHBTNs are assigned to PORT 03
+; PUSHBTN(0) is used to run operation
+; PUSHBTN(3) is used to reset design
+
+; NOTE: (s# usage):
+; s0,s1,s2 - Used in delay subroutines
+; s3	-	Stores global register for value to display
+; s5	-	Stores the debounced push btn signal
+; s6	-	Debounced register
+; s7    -   Operation value
+
+    reset: 	    LOAD    s3, 00	    ;reset ALU setpoint to 0
+                LOAD    s4, 00
+                OUTPUT  s3, 04      ;display reset values
+                OUTPUT  s4, 05
+                LOAD    s5, 00
+                LOAD    s6, 00
+
+                ; wait for btn 3 to be depressed to exit reset state
+                INPUT   s5, 03
+                TEST    s5, 08
+                JUMP    NZ, reset   ;stay in reset until 'depressed'
+		
+    ; Main Processing Loop
+    ; Runs debouncer on input push btns
+    ; Checks current state of push btns to perform operation
+    mainlp:	    INPUT   s5, 03	    ; store push buttons
+                CALL    del10ms	    ; delay 10ms
+                INPUT   s6, 03	    ; store push buttons again
+                AND     s5, s6		; AND push buttons to only keep signals high if held for 10ms
+                AND     s5, 09      ; Mask off unused bits
+                JUMP    Z, mainlp
+
+                ; Determine if Btn3 (BTND) was pressed
+                TEST    s5, 08
+                JUMP    NZ, reset	; Reset processor
+
+                ; Not reset, so it must be Btn0 (BTNR)
+                INPUT   s5, 02      ; Read operation and value
+                LOAD    s7, s5      ; Copy value
+                AND     s7, 0F      ; Mask off operation bits
+
+                ; Determine if add
+			    TEST    s5, 10
+			    CALL    NZ, opadd	; Start Addition
+
+                ; Or is it a sub?
+                TEST    s5, 20
+			    CALL    NZ, opsub	; Start Subtraction
+
+                ; Maybe a shift?
+                TEST    s5, 40
+			    CALL    NZ, oplsh	; Start Shift
+
+                ; Or a mult?
+                TEST    s5, 80
+			    CALL    NZ, opmul	; Start multiply
+                 
+                ; NOP
+			    
+			    ; Update Displays
+			    OUTPUT  s3, 04	    ; Update Display with ALU REG
+			    OUTPUT  s4, 05
+
+                ; Wait for all buttons to be up.
+    endlp:      INPUT   s5, 03
+                TEST    s5, 0F
+                JUMP    NZ, endlp
+
+			    JUMP    mainlp
+
+;-------------------------------------------------------------------------------	
+; Subroutines
+;-------------------------------------------------------------------------------	
+	;	ADD OPERATION
+	;	Handles Carry
+	opadd:	    ADD 	s3, s7      ; ADD s7 to current value
+                ADDCY   s4, 00
+                JUMP    opdone
+	
+	;	SUBTRACT OPERATION
+	;	Basic Subtract
+	opsub:	    SUB     s3, s7		; subtract s7 from current value
+                SUBCY   s4, 00
+                JUMP    opdone
+
+    ;   SHIFT OPERATION
+    oplsh:      TEST    s7, 0F      ; Any shifts to be done
+                JUMP Z, opdone
+                SL0     s3          ; Do one shift
+                SLA     s4
+                SUB     s7, 01      ; Decrement and
+                JUMP    oplsh       ; repeat
+
+    ;   MULTIPLY OPERATION
+    ;   Use a simple shift and add
+    opmul:      LOAD    s8, 08      ; Counter to loop 8 times (width of s7)
+                LOAD    s5, 00      ; 
+                LOAD    s6, 00      ; result = 0
+    mullp:      SL0     s5
+                SLA     s6          ; result *= 2
+                TEST    s7, 80      ; is msb of s7 set?
+                JUMP    Z, mulnext  ; Nope
+                ADD     s5, s3
+                ADDCY   s6, s4      ; result += current
+    mulnext:    SL0     s7          ; s7 <<= 2
+                SUB     s8, 01      ; handle loop
+                JUMP    NZ, mullp
+
+                LOAD    s3, s5      ; Copy result
+                LOAD    s4, s6
+                ; Fall through to opdone
+    opdone:
+                LOAD s5, 00
+                RETURN
+	
+
+    ;HELPER FUNCTIONS FROM TESTPROG (used for delay in top level, added a 10ms delay)
+    delms:	    INPUT s0,07
+    delmslp:	INPUT s1,07
+                COMPARE s0,s1
+                JUMP Z, delmslp
+                RETURN
+
+    del10ms:	LOAD s2, F5	        ;load 245
+    del10mslp:	CALL delms
+                ADD s2, 01
+                JUMP NZ, del10mslp
+                RETURN
+
+    del250ms:	LOAD s2, 05
+    del250mslp: CALL delms
+                ADD s2, 01
+                JUMP NZ, del250mslp
+                RETURN
+
+
+						                  
